@@ -207,6 +207,7 @@ func (c *Client) downloadFile(ctx context.Context, file Entry, localPath string)
 	if start > file.Size {
 		start = 0
 	}
+	resumeStart := start
 	flag := os.O_CREATE | os.O_WRONLY
 	if start > 0 {
 		flag |= os.O_APPEND
@@ -229,8 +230,9 @@ func (c *Client) downloadFile(ctx context.Context, file Entry, localPath string)
 	if start > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", start))
 	}
-	resp, err := c.http.Do(req)
+	resp, err := c.doDownloadRequest(req)
 	if err != nil {
+		c.cleanupFailedDownload(partPath, resumeStart)
 		return err
 	}
 	defer resp.Body.Close()
@@ -244,9 +246,11 @@ func (c *Client) downloadFile(ctx context.Context, file Entry, localPath string)
 		start = 0
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		c.cleanupFailedDownload(partPath, resumeStart)
 		return fmt.Errorf("download failed: %s", resp.Status)
 	}
 	if _, err := io.Copy(out, resp.Body); err != nil {
+		c.cleanupFailedDownload(partPath, resumeStart)
 		return err
 	}
 	if err := out.Close(); err != nil {
@@ -255,9 +259,58 @@ func (c *Client) downloadFile(ctx context.Context, file Entry, localPath string)
 	if st, err := os.Stat(partPath); err != nil {
 		return err
 	} else if file.Size > 0 && st.Size() != file.Size {
+		c.cleanupFailedDownload(partPath, resumeStart)
 		return fmt.Errorf("download incomplete for %s: got %d bytes, want %d", file.Name, st.Size(), file.Size)
 	}
 	return os.Rename(partPath, localPath)
+}
+
+func (c *Client) doDownloadRequest(req *http.Request) (*http.Response, error) {
+	const maxRedirects = 10
+	headers := req.Header.Clone()
+	for redirects := 0; ; redirects++ {
+		resp, err := c.downloadHTTPClient().Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode < 300 || resp.StatusCode > 399 {
+			return resp, nil
+		}
+		if redirects >= maxRedirects {
+			resp.Body.Close()
+			return nil, fmt.Errorf("download failed: stopped after %d redirects", maxRedirects)
+		}
+		location := resp.Header.Get("Location")
+		resp.Body.Close()
+		if location == "" {
+			return nil, fmt.Errorf("download failed: redirect missing Location")
+		}
+		nextURL, err := req.URL.Parse(location)
+		if err != nil {
+			return nil, err
+		}
+		nextReq, err := http.NewRequestWithContext(req.Context(), http.MethodGet, nextURL.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		nextReq.Header = headers.Clone()
+		req = nextReq
+	}
+}
+
+func (c *Client) downloadHTTPClient() *http.Client {
+	hc := *c.http
+	hc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &hc
+}
+
+func (c *Client) cleanupFailedDownload(partPath string, resumeStart int64) {
+	if resumeStart > 0 {
+		return
+	}
+	_ = os.Remove(partPath)
 }
 
 func (c *Client) uploadDir(ctx context.Context, localPath, remotePath string) error {

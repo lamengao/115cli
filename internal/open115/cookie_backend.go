@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -154,9 +155,13 @@ func (b *cookieBackend) DownloadURL(ctx context.Context, file Entry) (string, ma
 		if info.URL.URL == "" {
 			continue
 		}
+		cookie := strings.TrimSpace(string(info.URL.AuthCookie))
+		if cookie == "" {
+			cookie = b.cookie
+		}
 		return info.URL.URL, map[string]string{
 			"User-Agent": cookieUA,
-			"Cookie":     b.cookie,
+			"Cookie":     cookie,
 			"Accept":     "*/*",
 			"Referer":    "https://115.com/",
 		}, nil
@@ -385,6 +390,43 @@ type cookieDownloadInfo struct {
 	FileName string `json:"file_name"`
 	PickCode string `json:"pick_code"`
 	URL      struct {
-		URL string `json:"url"`
+		URL        string               `json:"url"`
+		AuthCookie cookieDownloadCookie `json:"auth_cookie"`
 	} `json:"url"`
+}
+
+type cookieDownloadCookie string
+
+func (c *cookieDownloadCookie) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*c = cookieDownloadCookie(s)
+		return nil
+	}
+	var values map[string]string
+	if err := json.Unmarshal(b, &values); err != nil {
+		return err
+	}
+	if name, ok := values["name"]; ok {
+		if value := values["value"]; value != "" {
+			*c = cookieDownloadCookie(name + "=" + value)
+			return nil
+		}
+	}
+	parts := make([]string, 0, len(values))
+	for name, value := range values {
+		if name == "" || value == "" {
+			continue
+		}
+		parts = append(parts, name+"="+value)
+	}
+	sort.Strings(parts)
+	*c = cookieDownloadCookie(strings.Join(parts, "; "))
+	return nil
 }

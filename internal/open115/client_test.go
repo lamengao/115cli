@@ -18,6 +18,7 @@ type fakeBackend struct {
 	deletes    []string
 	uploads    []string
 	download   string
+	headers    map[string]string
 	lastHeader http.Header
 }
 
@@ -39,6 +40,9 @@ func (f *fakeBackend) Delete(ctx context.Context, entry Entry) error {
 }
 
 func (f *fakeBackend) DownloadURL(ctx context.Context, file Entry) (string, map[string]string, error) {
+	if f.headers != nil {
+		return f.download, f.headers, nil
+	}
 	return f.download, map[string]string{"X-Test": "1"}, nil
 }
 
@@ -136,6 +140,63 @@ func TestDownloadResumesPartFile(t *testing.T) {
 	}
 	if string(data) != "helloworld" {
 		t.Fatalf("data = %q", data)
+	}
+}
+
+func TestDownloadPreservesHeadersAcrossRedirect(t *testing.T) {
+	var gotCookie string
+	var gotUA string
+	var targetURL string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		gotUA = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetURL, http.StatusFound)
+	}))
+	defer redirect.Close()
+	targetURL = target.URL
+
+	fb := &fakeBackend{
+		entries:  map[string][]Entry{"0": {{ID: "f", Name: "hello.txt", Size: 2, PickCode: "pc"}}},
+		download: redirect.URL,
+		headers: map[string]string{
+			"Cookie":     "UID=test; CID=test",
+			"User-Agent": "115cli-test",
+		},
+	}
+	dir := t.TempDir()
+	client := newWithBackend("0", fb, redirect.Client())
+	if err := client.Download(context.Background(), "/hello.txt", filepath.Join(dir, "hello.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if gotCookie != "UID=test; CID=test" {
+		t.Fatalf("cookie header = %q", gotCookie)
+	}
+	if gotUA != "115cli-test" {
+		t.Fatalf("user-agent header = %q", gotUA)
+	}
+}
+
+func TestDownloadRemovesNewPartFileOnHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+	fb := &fakeBackend{
+		entries:  map[string][]Entry{"0": {{ID: "f", Name: "hello.txt", Size: 2, PickCode: "pc"}}},
+		download: server.URL,
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "hello.txt")
+	client := newWithBackend("0", fb, server.Client())
+	if err := client.Download(context.Background(), "/hello.txt", target); err == nil {
+		t.Fatal("expected download error")
+	}
+	if _, err := os.Stat(target + ".part"); !os.IsNotExist(err) {
+		t.Fatalf("part file should be removed, stat err = %v", err)
 	}
 }
 
