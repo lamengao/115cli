@@ -61,6 +61,35 @@ func (b *sdkBackend) ListByID(ctx context.Context, id string) ([]Entry, error) {
 	return out, nil
 }
 
+func (b *sdkBackend) InfoByID(ctx context.Context, id string) (Info, error) {
+	resp, err := b.client.GetFolderInfo(ctx, id)
+	if err != nil {
+		return Info{}, err
+	}
+	size, err := parseInfoSize(resp.Size)
+	if err != nil {
+		return Info{}, err
+	}
+	files, err := strconv.Atoi(strings.TrimSpace(resp.Count))
+	if err != nil && strings.TrimSpace(resp.Count) != "" {
+		return Info{}, err
+	}
+	return Info{
+		Entry: Entry{
+			ID:        resp.FileID,
+			Name:      resp.FileName,
+			IsDir:     true,
+			PickCode:  resp.PickCode,
+			Sha1:      resp.Sha1,
+			CreatedAt: parseSDKInfoTime(resp.PTime),
+			UpdatedAt: parseSDKInfoTime(resp.UTime),
+		},
+		Size:    size,
+		Files:   files,
+		Folders: int(resp.FolderCount),
+	}, nil
+}
+
 func (b *sdkBackend) Mkdir(ctx context.Context, parentID, name string) (Entry, error) {
 	resp, err := b.client.Mkdir(ctx, parentID, name)
 	if err != nil {
@@ -182,8 +211,45 @@ func entryFromSDK(f sdk.GetFilesResp_File) Entry {
 		Size:      f.FS,
 		Sha1:      f.Sha1,
 		PickCode:  f.Pc,
-		UpdatedAt: time.Unix(f.Upt, 0),
+		CreatedAt: unixTime(firstNonZero(f.UpPt, f.Cm)),
+		UpdatedAt: unixTime(firstNonZero(f.Upt, f.Uet)),
 	}
+}
+
+func firstNonZero(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func unixTime(value int64) time.Time {
+	if value == 0 {
+		return time.Time{}
+	}
+	return time.Unix(value, 0)
+}
+
+func parseSDKInfoTime(value string) time.Time {
+	s := strings.TrimSpace(value)
+	if s == "" {
+		return time.Time{}
+	}
+	if ts, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return time.Unix(ts, 0)
+	}
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.FixedZone("UTC+8", 8*3600)
+	}
+	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02 15:04"} {
+		if t, err := time.ParseInLocation(layout, s, loc); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 func uploadHashes(r io.ReadSeeker) (string, string, error) {

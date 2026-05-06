@@ -68,6 +68,42 @@ func (c *Client) List(ctx context.Context, remotePath string) ([]Entry, error) {
 	return entries, nil
 }
 
+func (c *Client) Info(ctx context.Context, remotePath string) (Info, error) {
+	entry, err := c.Resolve(ctx, remotePath)
+	if err != nil {
+		return Info{}, err
+	}
+	if !entry.IsDir {
+		return Info{}, fmt.Errorf("%s is not a directory", cleanRemote(remotePath))
+	}
+	info, err := c.api.InfoByID(ctx, entry.ID)
+	if err != nil {
+		return Info{}, err
+	}
+	info.Entry = mergeInfoEntry(info.Entry, entry)
+	return info, nil
+}
+
+func mergeInfoEntry(info, resolved Entry) Entry {
+	if info.ID == "" {
+		info.ID = resolved.ID
+	}
+	if info.ParentID == "" {
+		info.ParentID = resolved.ParentID
+	}
+	if info.Name == "" {
+		info.Name = resolved.Name
+	}
+	info.IsDir = resolved.IsDir
+	if info.CreatedAt.IsZero() {
+		info.CreatedAt = resolved.CreatedAt
+	}
+	if info.UpdatedAt.IsZero() {
+		info.UpdatedAt = resolved.UpdatedAt
+	}
+	return info
+}
+
 func (c *Client) Resolve(ctx context.Context, remotePath string) (Entry, error) {
 	p := cleanRemote(remotePath)
 	root := Entry{ID: c.rootID, Name: "/", IsDir: true}

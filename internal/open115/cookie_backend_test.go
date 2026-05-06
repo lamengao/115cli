@@ -34,3 +34,23 @@ func TestCookieDownloadCookieParsesNameValueObject(t *testing.T) {
 		t.Fatalf("cookie = %q", got)
 	}
 }
+
+func TestParseInfoSize(t *testing.T) {
+	tests := map[string]int64{
+		"":       0,
+		"61":     61,
+		"61B":    61,
+		"1.5KB":  1536,
+		"2 MB":   2 * 1024 * 1024,
+		"3.25GB": 3489660928,
+	}
+	for value, want := range tests {
+		got, err := parseInfoSize(value)
+		if err != nil {
+			t.Fatalf("parseInfoSize(%q) returned error: %v", value, err)
+		}
+		if got != want {
+			t.Fatalf("parseInfoSize(%q) = %d, want %d", value, got, want)
+		}
+	}
+}

@@ -16,6 +16,7 @@ import (
 const (
 	cookieUA     = "Mozilla/5.0 115Browser/35.0.2.3"
 	apiFileList  = "https://webapi.115.com/files"
+	apiDirInfo   = "https://webapi.115.com/category/get"
 	apiDirAdd    = "https://webapi.115.com/files/add"
 	apiDelete    = "https://webapi.115.com/rb/delete"
 	apiDownload  = "https://proapi.115.com/app/chrome/downurl"
@@ -83,6 +84,48 @@ func (b *cookieBackend) ListByID(ctx context.Context, id string) ([]Entry, error
 		}
 	}
 	return out, nil
+}
+
+func (b *cookieBackend) InfoByID(ctx context.Context, id string) (Info, error) {
+	if id == "" {
+		id = "0"
+	}
+	q := url.Values{}
+	q.Set("aid", "1")
+	q.Set("cid", id)
+	var resp cookieDirInfoResp
+	if err := b.getJSON(ctx, apiDirInfo+"?"+q.Encode(), &resp); err != nil {
+		return Info{}, err
+	}
+	if !resp.State {
+		return Info{}, cookieAPIError(resp.basic())
+	}
+	size, err := parseInfoSize(string(resp.Size))
+	if err != nil {
+		return Info{}, err
+	}
+	files, err := parseCookieInt(resp.Count)
+	if err != nil {
+		return Info{}, err
+	}
+	folders, err := parseCookieInt(resp.FolderCount)
+	if err != nil {
+		return Info{}, err
+	}
+	return Info{
+		Entry: Entry{
+			ID:        id,
+			Name:      resp.FileName,
+			IsDir:     true,
+			PickCode:  resp.PickCode,
+			Sha1:      resp.Sha1,
+			CreatedAt: parseCookieTime(resp.CreateTime),
+			UpdatedAt: parseCookieTime(resp.UpdateTime),
+		},
+		Size:    size,
+		Files:   files,
+		Folders: folders,
+	}, nil
 }
 
 func (b *cookieBackend) Mkdir(ctx context.Context, parentID, name string) (Entry, error) {
@@ -243,18 +286,30 @@ func entryFromCookie(f cookieFileInfo) Entry {
 		Size:      int64(f.Size),
 		Sha1:      f.Sha1,
 		PickCode:  f.PickCode,
-		UpdatedAt: parseCookieUpdateTime(f.UpdateTime, isDir),
+		CreatedAt: parseCookieTime(f.CreateTime),
+		UpdatedAt: parseCookieTime(f.UpdateTime),
 	}
 }
 
-func parseCookieUpdateTime(value string, isDir bool) time.Time {
+func parseCookieInt(value cookieIntString) (int, error) {
+	n, err := parseCookieInt64(value)
+	return int(n), err
+}
+
+func parseCookieInt64(value cookieIntString) (int64, error) {
+	s := strings.TrimSpace(string(value))
+	if s == "" {
+		return 0, nil
+	}
+	return strconv.ParseInt(s, 10, 64)
+}
+
+func parseCookieTime(value string) time.Time {
 	if value == "" {
 		return time.Time{}
 	}
-	if isDir {
-		if ts, err := strconv.ParseInt(value, 10, 64); err == nil {
-			return time.Unix(ts, 0)
-		}
+	if ts, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return time.Unix(ts, 0)
 	}
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
@@ -343,7 +398,28 @@ type cookieFileInfo struct {
 	Size       cookieStringInt `json:"s"`
 	Sha1       string          `json:"sha"`
 	PickCode   string          `json:"pc"`
+	CreateTime string          `json:"tp"`
 	UpdateTime string          `json:"t"`
+}
+
+type cookieDirInfoResp struct {
+	Errno       cookieStringInt `json:"errno,omitempty"`
+	ErrNo       int             `json:"errNo,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	State       bool            `json:"state,omitempty"`
+	Msg         string          `json:"msg,omitempty"`
+	Count       cookieIntString `json:"count"`
+	Size        cookieIntString `json:"size"`
+	FolderCount cookieIntString `json:"folder_count"`
+	FileName    string          `json:"file_name"`
+	PickCode    string          `json:"pick_code"`
+	Sha1        string          `json:"sha1"`
+	CreateTime  string          `json:"ptime"`
+	UpdateTime  string          `json:"utime"`
+}
+
+func (r cookieDirInfoResp) basic() cookieBasicResp {
+	return cookieBasicResp{Errno: r.Errno, ErrNo: r.ErrNo, Error: r.Error, State: r.State, Msg: r.Msg}
 }
 
 type cookieMkdirResp struct {

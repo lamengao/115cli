@@ -14,6 +14,9 @@ import (
 
 type fakeBackend struct {
 	entries    map[string][]Entry
+	infos      map[string]Info
+	listCalls  []string
+	infoCalls  []string
 	mkdirs     []string
 	deletes    []string
 	uploads    []string
@@ -23,7 +26,13 @@ type fakeBackend struct {
 }
 
 func (f *fakeBackend) ListByID(ctx context.Context, id string) ([]Entry, error) {
+	f.listCalls = append(f.listCalls, id)
 	return append([]Entry(nil), f.entries[id]...), nil
+}
+
+func (f *fakeBackend) InfoByID(ctx context.Context, id string) (Info, error) {
+	f.infoCalls = append(f.infoCalls, id)
+	return f.infos[id], nil
 }
 
 func (f *fakeBackend) Mkdir(ctx context.Context, parentID, name string) (Entry, error) {
@@ -82,6 +91,53 @@ func TestListSortsDirectoriesFirst(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Name != "abc" || !got[0].IsDir {
 		t.Fatalf("entries = %#v", got)
+	}
+}
+
+func TestInfoUsesDirectDirectoryInfo(t *testing.T) {
+	created := time.Date(2026, 5, 6, 2, 29, 0, 0, time.UTC)
+	updated := time.Date(2026, 5, 6, 2, 30, 0, 0, time.UTC)
+	fb := &fakeBackend{
+		entries: map[string][]Entry{
+			"0": {
+				{ID: "d", Name: "testupdir", IsDir: true, CreatedAt: created, UpdatedAt: updated},
+			},
+		},
+		infos: map[string]Info{
+			"d": {
+				Entry:   Entry{ID: "d", Name: "testupdir", IsDir: true, CreatedAt: created, UpdatedAt: updated},
+				Size:    24,
+				Folders: 1,
+				Files:   4,
+			},
+		},
+	}
+	client := newWithBackend("0", fb, nil)
+	got, err := client.Info(context.Background(), "/testupdir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Entry.ID != "d" || got.Size != 24 || got.Folders != 1 || got.Files != 4 {
+		t.Fatalf("info = %#v", got)
+	}
+	if !got.Entry.CreatedAt.Equal(created) || !got.Entry.UpdatedAt.Equal(updated) {
+		t.Fatalf("times = %#v", got.Entry)
+	}
+	if strings.Join(fb.infoCalls, ",") != "d" {
+		t.Fatalf("info calls = %#v", fb.infoCalls)
+	}
+	if strings.Join(fb.listCalls, ",") != "0" {
+		t.Fatalf("list calls = %#v", fb.listCalls)
+	}
+}
+
+func TestInfoRejectsFiles(t *testing.T) {
+	fb := &fakeBackend{entries: map[string][]Entry{
+		"0": {{ID: "f", Name: "a.txt", IsDir: false, Size: 10}},
+	}}
+	client := newWithBackend("0", fb, nil)
+	if _, err := client.Info(context.Background(), "/a.txt"); err == nil {
+		t.Fatal("expected error for file info")
 	}
 }
 
