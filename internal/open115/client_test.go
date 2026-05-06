@@ -376,6 +376,41 @@ func TestSyncReplacesSameNameFileWhenSizeDiffers(t *testing.T) {
 	}
 }
 
+func TestSyncCanDeleteRemoteFilesMissingLocally(t *testing.T) {
+	fb := &fakeBackend{entries: map[string][]Entry{
+		"0": {
+			{ID: "r", Name: "backup", IsDir: true},
+		},
+		"r": {
+			{ID: "keep", ParentID: "r", Name: "keep.txt", IsDir: false, Size: 4},
+			{ID: "extra", ParentID: "r", Name: "extra.txt", IsDir: false, Size: 5},
+			{ID: "extra-dir", ParentID: "r", Name: "extra-dir", IsDir: true},
+			{ID: "nested", ParentID: "r", Name: "nested", IsDir: true},
+		},
+		"nested": {
+			{ID: "nested-extra", ParentID: "nested", Name: "old.txt", IsDir: false, Size: 3},
+		},
+	}}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "keep.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newWithBackend("0", fb, nil)
+	err := client.SyncWithOptions(context.Background(), root, "/backup", SyncOptions{
+		DeleteRemoteMissing: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(fb.deletes, ",") != "nested:nested-extra,r:extra" {
+		t.Fatalf("deletes = %#v", fb.deletes)
+	}
+}
+
 func TestSyncFollowsSymlinkDirectoriesAndFiles(t *testing.T) {
 	fb := &fakeBackend{entries: map[string][]Entry{
 		"0": {{ID: "r", Name: "backup", IsDir: true}},

@@ -30,12 +30,14 @@
 - `./115cli up ./local-file.txt /remote/folder`
 - `./115cli up ./local-folder /remote/backup`
 - `./115cli sync ./local-folder /remote/backup`
+- `./115cli sync --delete-remote-missing ./local-folder /remote/backup`
 - `./115cli del /remote/file-or-folder`
 
 ## Sync Behavior
 
 - `sync` compares the local directory with the remote directory and uploads files or directories that are present locally but missing remotely. If a same-name remote file has a different size, `sync` deletes the remote file first and uploads the local file again.
 - `sync` follows symlinked files and directories, but must skip directory symlink loops.
+- `sync --delete-remote-missing` deletes remote files that have no same-name local entry. It must not delete remote directories.
 - `sync` must not delete or modify local files.
 - With cookie authentication, `ls`, `down`, `up`, `sync`, and `del` use 115 web endpoints.
 - Cookie uploads first try instant upload by SHA1 and fall back to OSS upload with 115 web upload signing.

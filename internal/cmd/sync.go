@@ -6,7 +6,10 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/yibing/115cli/internal/open115"
 )
+
+var syncDeleteRemoteMissing bool
 
 var syncCmd = &cobra.Command{
 	Use:   "sync <local-dir-path> <remote-dir-path>",
@@ -27,6 +30,12 @@ var syncCmd = &cobra.Command{
 				fmt.Fprintln(os.Stderr)
 			}
 		})
-		return client.Sync(context.Background(), args[0], args[1])
+		return client.SyncWithOptions(context.Background(), args[0], args[1], open115.SyncOptions{
+			DeleteRemoteMissing: syncDeleteRemoteMissing,
+		})
 	},
+}
+
+func init() {
+	syncCmd.Flags().BoolVar(&syncDeleteRemoteMissing, "delete-remote-missing", false, "delete remote files that are missing locally")
 }
