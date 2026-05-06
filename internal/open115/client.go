@@ -15,6 +15,8 @@ import (
 
 var ErrNotFound = errors.New("remote path not found")
 
+const largeDirectoryThreshold = 10000
+
 type Client struct {
 	rootID   string
 	api      backend
@@ -60,7 +62,21 @@ func (c *Client) List(ctx context.Context, remotePath string) ([]Entry, error) {
 	if !entry.IsDir {
 		return nil, fmt.Errorf("%s is not a directory", cleanRemote(remotePath))
 	}
-	entries, err := c.api.ListByID(ctx, entry.ID)
+	info, err := c.api.InfoByID(ctx, entry.ID)
+	if err != nil {
+		return nil, err
+	}
+	total := info.Files + info.Folders
+	var entries []Entry
+	if total > largeDirectoryThreshold {
+		if api, ok := c.api.(batchedListBackend); ok {
+			entries, err = api.ListByIDBatched(ctx, entry.ID, total)
+		} else {
+			entries, err = c.api.ListByID(ctx, entry.ID)
+		}
+	} else {
+		entries, err = c.api.ListByID(ctx, entry.ID)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -42,16 +42,37 @@ func NewCookie(cookie, rootID string) *Client {
 }
 
 func (b *cookieBackend) ListByID(ctx context.Context, id string) ([]Entry, error) {
+	return b.listByID(ctx, id, defaultLimit, -1)
+}
+
+func (b *cookieBackend) ListByIDBatched(ctx context.Context, id string, count int) ([]Entry, error) {
+	return b.listByID(ctx, id, maxPageLimit, count)
+}
+
+func (b *cookieBackend) listByID(ctx context.Context, id string, pageLimit int64, expectedCount int) ([]Entry, error) {
 	if id == "" {
 		id = "0"
 	}
-	limit := defaultLimit
+	limit := pageLimit
 	if limit > maxPageLimit {
 		limit = maxPageLimit
+	}
+	if limit <= 0 {
+		limit = defaultLimit
 	}
 	var out []Entry
 	var offset int64
 	for {
+		requestLimit := limit
+		if expectedCount >= 0 {
+			remaining := int64(expectedCount) - offset
+			if remaining <= 0 {
+				break
+			}
+			if remaining < requestLimit {
+				requestLimit = remaining
+			}
+		}
 		q := url.Values{}
 		q.Set("aid", "1")
 		q.Set("cid", id)
@@ -59,7 +80,7 @@ func (b *cookieBackend) ListByID(ctx context.Context, id string) ([]Entry, error
 		q.Set("asc", "1")
 		q.Set("offset", strconv.FormatInt(offset, 10))
 		q.Set("show_dir", "1")
-		q.Set("limit", strconv.FormatInt(limit, 10))
+		q.Set("limit", strconv.FormatInt(requestLimit, 10))
 		q.Set("snap", "0")
 		q.Set("natsort", "0")
 		q.Set("record_open_time", "1")
@@ -78,8 +99,12 @@ func (b *cookieBackend) ListByID(ctx context.Context, id string) ([]Entry, error
 		for _, item := range resp.Files {
 			out = append(out, entryFromCookie(item))
 		}
-		offset = int64(resp.Offset) + limit
-		if offset >= int64(resp.Count) || len(resp.Files) == 0 {
+		offset = int64(resp.Offset) + int64(len(resp.Files))
+		count := resp.Count
+		if expectedCount >= 0 {
+			count = expectedCount
+		}
+		if offset >= int64(count) || len(resp.Files) == 0 {
 			break
 		}
 	}

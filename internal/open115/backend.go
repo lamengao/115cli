@@ -13,3 +13,7 @@ type backend interface {
 	DownloadURL(ctx context.Context, file Entry) (string, map[string]string, error)
 	UploadFile(ctx context.Context, parentID, name string, size int64, r io.ReadSeeker, progress ProgressFunc) error
 }
+
+type batchedListBackend interface {
+	ListByIDBatched(ctx context.Context, id string, count int) ([]Entry, error)
+}

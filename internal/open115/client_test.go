@@ -16,6 +16,7 @@ type fakeBackend struct {
 	entries    map[string][]Entry
 	infos      map[string]Info
 	listCalls  []string
+	batchCalls []string
 	infoCalls  []string
 	mkdirs     []string
 	deletes    []string
@@ -27,6 +28,11 @@ type fakeBackend struct {
 
 func (f *fakeBackend) ListByID(ctx context.Context, id string) ([]Entry, error) {
 	f.listCalls = append(f.listCalls, id)
+	return append([]Entry(nil), f.entries[id]...), nil
+}
+
+func (f *fakeBackend) ListByIDBatched(ctx context.Context, id string, count int) ([]Entry, error) {
+	f.batchCalls = append(f.batchCalls, id)
 	return append([]Entry(nil), f.entries[id]...), nil
 }
 
@@ -91,6 +97,34 @@ func TestListSortsDirectoriesFirst(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Name != "abc" || !got[0].IsDir {
 		t.Fatalf("entries = %#v", got)
+	}
+}
+
+func TestListUsesBatchedListingForLargeDirectories(t *testing.T) {
+	fb := &fakeBackend{
+		entries: map[string][]Entry{
+			"0": {{ID: "f", Name: "z.txt", IsDir: false}},
+		},
+		infos: map[string]Info{
+			"0": {Files: largeDirectoryThreshold + 1},
+		},
+	}
+	client := newWithBackend("0", fb, nil)
+	got, err := client.List(context.Background(), "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "z.txt" {
+		t.Fatalf("entries = %#v", got)
+	}
+	if strings.Join(fb.infoCalls, ",") != "0" {
+		t.Fatalf("info calls = %#v", fb.infoCalls)
+	}
+	if strings.Join(fb.batchCalls, ",") != "0" {
+		t.Fatalf("batch calls = %#v", fb.batchCalls)
+	}
+	if len(fb.listCalls) != 0 {
+		t.Fatalf("regular list calls = %#v", fb.listCalls)
 	}
 }
 
