@@ -186,7 +186,11 @@ func (c *Client) Sync(ctx context.Context, localDir, remoteDir string) error {
 	if err != nil {
 		return err
 	}
-	return c.syncDir(ctx, localDir, target)
+	seen, err := syncSeenDirs(localDir)
+	if err != nil {
+		return err
+	}
+	return c.syncDir(ctx, localDir, target, seen)
 }
 
 func (c *Client) Delete(ctx context.Context, remotePath string) error {
@@ -431,7 +435,27 @@ func (c *Client) resolveSyncTarget(ctx context.Context, remoteDir string) (Entry
 	return c.ensureRemoteDir(ctx, remoteDir)
 }
 
-func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry) error {
+func syncSeenDirs(localDir string) (map[string]bool, error) {
+	realPath, err := filepath.EvalSymlinks(localDir)
+	if err != nil {
+		return nil, err
+	}
+	absPath, err := filepath.Abs(realPath)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]bool{absPath: true}, nil
+}
+
+func syncRealDir(localDir string) (string, error) {
+	realPath, err := filepath.EvalSymlinks(localDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(realPath)
+}
+
+func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry, seen map[string]bool) error {
 	remoteChildren, err := c.api.ListByID(ctx, remoteDir.ID)
 	if err != nil {
 		return err
@@ -448,17 +472,26 @@ func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry) 
 	var failures []string
 	for _, child := range localChildren {
 		localPath := filepath.Join(localDir, child.Name())
+		info, err := os.Stat(localPath)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
+			continue
+		}
+		isDir := info.IsDir()
 		remoteChild, exists := remoteByName[child.Name()]
 		if exists {
-			if child.IsDir() && remoteChild.IsDir {
-				if err := c.syncDir(ctx, localPath, remoteChild); err != nil {
-					failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
-				}
-			} else if !child.IsDir() && !remoteChild.IsDir {
-				info, err := child.Info()
+			if isDir && remoteChild.IsDir {
+				leave, ok, err := syncEnterDir(localPath, seen)
 				if err != nil {
 					failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
-				} else if info.Size() != remoteChild.Size {
+				} else if ok {
+					if err := c.syncDir(ctx, localPath, remoteChild, seen); err != nil {
+						failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
+					}
+					leave()
+				}
+			} else if !isDir && !remoteChild.IsDir {
+				if info.Size() != remoteChild.Size {
 					if err := c.api.Delete(ctx, remoteChild); err != nil {
 						failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
 					} else if err := c.uploadOneFile(ctx, localPath, remoteDir.ID, child.Name()); err != nil {
@@ -468,15 +501,25 @@ func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry) 
 			}
 			continue
 		}
-		if child.IsDir() {
-			created, err := c.ensureChildDir(ctx, remoteDir, child.Name())
+		if isDir {
+			leave, ok, err := syncEnterDir(localPath, seen)
 			if err != nil {
 				failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
 				continue
 			}
-			if err := c.syncDir(ctx, localPath, created); err != nil {
+			if !ok {
+				continue
+			}
+			created, err := c.ensureChildDir(ctx, remoteDir, child.Name())
+			if err != nil {
+				leave()
+				failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
+				continue
+			}
+			if err := c.syncDir(ctx, localPath, created, seen); err != nil {
 				failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
 			}
+			leave()
 			continue
 		}
 		if err := c.uploadOneFile(ctx, localPath, remoteDir.ID, child.Name()); err != nil {
@@ -487,6 +530,18 @@ func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry) 
 		return fmt.Errorf("sync completed with %d failure(s):\n%s", len(failures), strings.Join(failures, "\n"))
 	}
 	return nil
+}
+
+func syncEnterDir(localDir string, seen map[string]bool) (func(), bool, error) {
+	realPath, err := syncRealDir(localDir)
+	if err != nil {
+		return nil, false, err
+	}
+	if seen[realPath] {
+		return nil, false, nil
+	}
+	seen[realPath] = true
+	return func() { delete(seen, realPath) }, true, nil
 }
 
 func (c *Client) resolveUploadFileTarget(ctx context.Context, remotePath, defaultName string) (Entry, string, error) {

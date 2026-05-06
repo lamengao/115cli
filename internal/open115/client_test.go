@@ -376,6 +376,68 @@ func TestSyncReplacesSameNameFileWhenSizeDiffers(t *testing.T) {
 	}
 }
 
+func TestSyncFollowsSymlinkDirectoriesAndFiles(t *testing.T) {
+	fb := &fakeBackend{entries: map[string][]Entry{
+		"0": {{ID: "r", Name: "backup", IsDir: true}},
+		"r": nil,
+	}}
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targetFile := filepath.Join(target, "inside.txt")
+	if err := os.WriteFile(targetFile, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "linkdir")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetFile, filepath.Join(root, "linkfile.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newWithBackend("0", fb, nil)
+	if err := client.Sync(context.Background(), root, "/backup"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(fb.mkdirs, ",") != "r:linkdir" {
+		t.Fatalf("mkdirs = %#v", fb.mkdirs)
+	}
+	if strings.Join(fb.uploads, ",") != "r/linkdir:inside.txt,r:linkfile.txt" {
+		t.Fatalf("uploads = %#v", fb.uploads)
+	}
+}
+
+func TestSyncSkipsDirectorySymlinkLoops(t *testing.T) {
+	fb := &fakeBackend{entries: map[string][]Entry{
+		"0": {{ID: "r", Name: "backup", IsDir: true}},
+		"r": nil,
+	}}
+	root := t.TempDir()
+	childDir := filepath.Join(root, "child")
+	if err := os.Mkdir(childDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(childDir, "inside.txt"), []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(root, filepath.Join(childDir, "back")); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newWithBackend("0", fb, nil)
+	if err := client.Sync(context.Background(), root, "/backup"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(fb.mkdirs, ",") != "r:child" {
+		t.Fatalf("mkdirs = %#v", fb.mkdirs)
+	}
+	if strings.Join(fb.uploads, ",") != "r/child:inside.txt" {
+		t.Fatalf("uploads = %#v", fb.uploads)
+	}
+}
+
 func TestSyncCreatesMissingRemoteTargetWithoutLocalBasename(t *testing.T) {
 	fb := &fakeBackend{entries: map[string][]Entry{"0": nil}}
 	root := t.TempDir()
