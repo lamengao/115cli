@@ -2,6 +2,7 @@ package open115
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 type fakeBackend struct {
 	entries    map[string][]Entry
 	infos      map[string]Info
+	infoErrs   map[string]error
 	listCalls  []string
 	batchCalls []string
 	infoCalls  []string
@@ -38,6 +40,9 @@ func (f *fakeBackend) ListByIDBatched(ctx context.Context, id string, count int)
 
 func (f *fakeBackend) InfoByID(ctx context.Context, id string) (Info, error) {
 	f.infoCalls = append(f.infoCalls, id)
+	if err := f.infoErrs[id]; err != nil {
+		return Info{}, err
+	}
 	return f.infos[id], nil
 }
 
@@ -100,30 +105,56 @@ func TestListSortsDirectoriesFirst(t *testing.T) {
 	}
 }
 
-func TestListUsesBatchedListingForLargeDirectories(t *testing.T) {
+func TestResolveDoesNotRequireRootInfo(t *testing.T) {
 	fb := &fakeBackend{
 		entries: map[string][]Entry{
-			"0": {{ID: "f", Name: "z.txt", IsDir: false}},
+			"0": {{ID: "d", Name: "test", IsDir: true}},
 		},
-		infos: map[string]Info{
-			"0": {Files: largeDirectoryThreshold + 1},
+		infoErrs: map[string]error{
+			"0": errors.New("参数错误 (code 1001)"),
 		},
 	}
 	client := newWithBackend("0", fb, nil)
-	got, err := client.List(context.Background(), "/")
+	got, err := client.Resolve(context.Background(), "/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "d" || got.Name != "test" {
+		t.Fatalf("resolved %#v", got)
+	}
+	if len(fb.infoCalls) != 0 {
+		t.Fatalf("info calls = %#v", fb.infoCalls)
+	}
+	if strings.Join(fb.listCalls, ",") != "0" {
+		t.Fatalf("list calls = %#v", fb.listCalls)
+	}
+}
+
+func TestListUsesBatchedListingForLargeDirectories(t *testing.T) {
+	fb := &fakeBackend{
+		entries: map[string][]Entry{
+			"0": {{ID: "d", Name: "big", IsDir: true}},
+			"d": {{ID: "f", Name: "z.txt", IsDir: false}},
+		},
+		infos: map[string]Info{
+			"d": {Files: largeDirectoryThreshold + 1},
+		},
+	}
+	client := newWithBackend("0", fb, nil)
+	got, err := client.List(context.Background(), "/big")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Name != "z.txt" {
 		t.Fatalf("entries = %#v", got)
 	}
-	if strings.Join(fb.infoCalls, ",") != "0" {
+	if strings.Join(fb.infoCalls, ",") != "d" {
 		t.Fatalf("info calls = %#v", fb.infoCalls)
 	}
-	if strings.Join(fb.batchCalls, ",") != "0" {
+	if strings.Join(fb.batchCalls, ",") != "d" {
 		t.Fatalf("batch calls = %#v", fb.batchCalls)
 	}
-	if len(fb.listCalls) != 0 {
+	if strings.Join(fb.listCalls, ",") != "0" {
 		t.Fatalf("regular list calls = %#v", fb.listCalls)
 	}
 }
@@ -407,6 +438,41 @@ func TestSyncReplacesSameNameFileWhenSizeDiffers(t *testing.T) {
 	}
 	if strings.Join(fb.uploads, ",") != "r:changed.txt" {
 		t.Fatalf("uploads = %#v", fb.uploads)
+	}
+}
+
+func TestSyncUsesBatchedListingForLargeRemoteDirectories(t *testing.T) {
+	fb := &fakeBackend{
+		entries: map[string][]Entry{
+			"0": {
+				{ID: "r", Name: "backup", IsDir: true},
+			},
+			"r": {
+				{ID: "same", ParentID: "r", Name: "same.txt", IsDir: false, Size: 4},
+			},
+		},
+		infos: map[string]Info{
+			"0": {Folders: largeDirectoryThreshold + 1},
+			"r": {Files: largeDirectoryThreshold + 1},
+		},
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "same.txt"), []byte("same"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newWithBackend("0", fb, nil)
+	if err := client.Sync(context.Background(), root, "/backup"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(fb.batchCalls, ",") != "r" {
+		t.Fatalf("batch calls = %#v", fb.batchCalls)
+	}
+	if strings.Join(fb.listCalls, ",") != "0" {
+		t.Fatalf("regular list calls = %#v", fb.listCalls)
+	}
+	if len(fb.uploads) != 0 || len(fb.deletes) != 0 {
+		t.Fatalf("uploads = %#v, deletes = %#v", fb.uploads, fb.deletes)
 	}
 }
 

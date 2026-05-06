@@ -62,21 +62,7 @@ func (c *Client) List(ctx context.Context, remotePath string) ([]Entry, error) {
 	if !entry.IsDir {
 		return nil, fmt.Errorf("%s is not a directory", cleanRemote(remotePath))
 	}
-	info, err := c.api.InfoByID(ctx, entry.ID)
-	if err != nil {
-		return nil, err
-	}
-	total := info.Files + info.Folders
-	var entries []Entry
-	if total > largeDirectoryThreshold {
-		if api, ok := c.api.(batchedListBackend); ok {
-			entries, err = api.ListByIDBatched(ctx, entry.ID, total)
-		} else {
-			entries, err = c.api.ListByID(ctx, entry.ID)
-		}
-	} else {
-		entries, err = c.api.ListByID(ctx, entry.ID)
-	}
+	entries, err := c.listChildren(ctx, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -87,6 +73,23 @@ func (c *Client) List(ctx context.Context, remotePath string) ([]Entry, error) {
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
 	return entries, nil
+}
+
+func (c *Client) listChildren(ctx context.Context, dir Entry) ([]Entry, error) {
+	if dir.ID == "" || dir.ID == "0" {
+		return c.api.ListByID(ctx, dir.ID)
+	}
+	info, err := c.api.InfoByID(ctx, dir.ID)
+	if err != nil {
+		return nil, err
+	}
+	total := info.Files + info.Folders
+	if total > largeDirectoryThreshold {
+		if api, ok := c.api.(batchedListBackend); ok {
+			return api.ListByIDBatched(ctx, dir.ID, total)
+		}
+	}
+	return c.api.ListByID(ctx, dir.ID)
 }
 
 func (c *Client) Info(ctx context.Context, remotePath string) (Info, error) {
@@ -136,7 +139,7 @@ func (c *Client) Resolve(ctx context.Context, remotePath string) (Entry, error) 
 		if !cur.IsDir {
 			return Entry{}, fmt.Errorf("%s is not a directory", cur.Name)
 		}
-		children, err := c.api.ListByID(ctx, cur.ID)
+		children, err := c.listChildren(ctx, cur)
 		if err != nil {
 			return Entry{}, err
 		}
@@ -240,7 +243,7 @@ func (c *Client) downloadDir(ctx context.Context, dir Entry, localDir string) er
 	if err := os.MkdirAll(localDir, 0o755); err != nil {
 		return err
 	}
-	children, err := c.api.ListByID(ctx, dir.ID)
+	children, err := c.listChildren(ctx, dir)
 	if err != nil {
 		return err
 	}
@@ -487,7 +490,7 @@ func syncRealDir(localDir string) (string, error) {
 }
 
 func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry, remotePath string, seen map[string]bool, opts SyncOptions) error {
-	remoteChildren, err := c.api.ListByID(ctx, remoteDir.ID)
+	remoteChildren, err := c.listChildren(ctx, remoteDir)
 	if err != nil {
 		return err
 	}
@@ -663,7 +666,7 @@ func (c *Client) ensureRemoteDir(ctx context.Context, remotePath string) (Entry,
 }
 
 func (c *Client) ensureChildDir(ctx context.Context, parent Entry, name string) (Entry, error) {
-	children, err := c.api.ListByID(ctx, parent.ID)
+	children, err := c.listChildren(ctx, parent)
 	if err != nil {
 		return Entry{}, err
 	}
