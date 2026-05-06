@@ -24,6 +24,7 @@ type Client struct {
 
 type SyncOptions struct {
 	DeleteRemoteMissing bool
+	Log                 func(action, remotePath string)
 }
 
 func New(refreshToken, accessToken, rootID string, onTokenRefresh func(accessToken, refreshToken string)) *Client {
@@ -198,7 +199,13 @@ func (c *Client) SyncWithOptions(ctx context.Context, localDir, remoteDir string
 	if err != nil {
 		return err
 	}
-	return c.syncDir(ctx, localDir, target, seen, opts)
+	return c.syncDir(ctx, localDir, target, cleanRemote(remoteDir), seen, opts)
+}
+
+func (c *Client) syncLog(opts SyncOptions, action, remotePath string) {
+	if opts.Log != nil {
+		opts.Log(action, remotePath)
+	}
 }
 
 func (c *Client) Delete(ctx context.Context, remotePath string) error {
@@ -463,7 +470,7 @@ func syncRealDir(localDir string) (string, error) {
 	return filepath.Abs(realPath)
 }
 
-func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry, seen map[string]bool, opts SyncOptions) error {
+func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry, remotePath string, seen map[string]bool, opts SyncOptions) error {
 	remoteChildren, err := c.api.ListByID(ctx, remoteDir.ID)
 	if err != nil {
 		return err
@@ -497,7 +504,7 @@ func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry, 
 				if err != nil {
 					failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
 				} else if ok {
-					if err := c.syncDir(ctx, localPath, remoteChild, seen, opts); err != nil {
+					if err := c.syncDir(ctx, localPath, remoteChild, syncRemotePath(remotePath, remoteChild.Name), seen, opts); err != nil {
 						failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
 					}
 					leave()
@@ -508,6 +515,9 @@ func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry, 
 						failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
 					} else if err := c.uploadOneFile(ctx, localPath, remoteDir.ID, child.Name()); err != nil {
 						failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
+					} else {
+						c.syncLog(opts, "delete", syncRemotePath(remotePath, remoteChild.Name))
+						c.syncLog(opts, "upload", syncRemotePath(remotePath, child.Name()))
 					}
 				}
 			}
@@ -528,7 +538,9 @@ func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry, 
 				failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
 				continue
 			}
-			if err := c.syncDir(ctx, localPath, created, seen, opts); err != nil {
+			childRemotePath := syncRemotePath(remotePath, child.Name())
+			c.syncLog(opts, "mkdir", childRemotePath)
+			if err := c.syncDir(ctx, localPath, created, childRemotePath, seen, opts); err != nil {
 				failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
 			}
 			leave()
@@ -536,6 +548,8 @@ func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry, 
 		}
 		if err := c.uploadOneFile(ctx, localPath, remoteDir.ID, child.Name()); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", localPath, err))
+		} else {
+			c.syncLog(opts, "upload", syncRemotePath(remotePath, child.Name()))
 		}
 	}
 	if opts.DeleteRemoteMissing {
@@ -545,6 +559,8 @@ func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry, 
 			}
 			if err := c.api.Delete(ctx, child); err != nil {
 				failures = append(failures, fmt.Sprintf("%s/%s: %v", cleanRemote(remoteDir.Name), child.Name, err))
+			} else {
+				c.syncLog(opts, "delete", syncRemotePath(remotePath, child.Name))
 			}
 		}
 	}
@@ -552,6 +568,13 @@ func (c *Client) syncDir(ctx context.Context, localDir string, remoteDir Entry, 
 		return fmt.Errorf("sync completed with %d failure(s):\n%s", len(failures), strings.Join(failures, "\n"))
 	}
 	return nil
+}
+
+func syncRemotePath(parentPath, name string) string {
+	if cleanRemote(parentPath) == "/" {
+		return cleanRemote(name)
+	}
+	return cleanRemote(path.Join(parentPath, name))
 }
 
 func syncEnterDir(localDir string, seen map[string]bool) (func(), bool, error) {

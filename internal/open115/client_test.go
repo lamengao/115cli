@@ -411,6 +411,47 @@ func TestSyncCanDeleteRemoteFilesMissingLocally(t *testing.T) {
 	}
 }
 
+func TestSyncLogsRemoteChanges(t *testing.T) {
+	fb := &fakeBackend{entries: map[string][]Entry{
+		"0": {
+			{ID: "r", Name: "backup", IsDir: true},
+		},
+		"r": {
+			{ID: "old", ParentID: "r", Name: "changed.txt", IsDir: false, Size: 3},
+			{ID: "extra", ParentID: "r", Name: "extra.txt", IsDir: false, Size: 5},
+		},
+	}}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "changed.txt"), []byte("local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "new.txt"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "newdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "newdir", "inside.txt"), []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs []string
+	client := newWithBackend("0", fb, nil)
+	err := client.SyncWithOptions(context.Background(), root, "/backup", SyncOptions{
+		DeleteRemoteMissing: true,
+		Log: func(action, remotePath string) {
+			logs = append(logs, action+" "+remotePath)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "delete /backup/changed.txt,upload /backup/changed.txt,upload /backup/new.txt,mkdir /backup/newdir,upload /backup/newdir/inside.txt,delete /backup/extra.txt"
+	if strings.Join(logs, ",") != want {
+		t.Fatalf("logs = %#v", logs)
+	}
+}
+
 func TestSyncFollowsSymlinkDirectoriesAndFiles(t *testing.T) {
 	fb := &fakeBackend{entries: map[string][]Entry{
 		"0": {{ID: "r", Name: "backup", IsDir: true}},

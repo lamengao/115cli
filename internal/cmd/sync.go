@@ -32,6 +32,9 @@ var syncCmd = &cobra.Command{
 		})
 		return client.SyncWithOptions(context.Background(), args[0], args[1], open115.SyncOptions{
 			DeleteRemoteMissing: syncDeleteRemoteMissing,
+			Log: func(action, remotePath string) {
+				fmt.Fprintf(os.Stdout, "%s %s\n", action, remotePath)
+			},
 		})
 	},
 }
