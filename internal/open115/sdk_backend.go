@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -20,6 +21,8 @@ const userAgent = "115cli/0.1"
 type sdkBackend struct {
 	client *sdk.Client
 }
+
+var errCookieAuthRequired = errors.New("cloud download commands require cookie authentication")
 
 func newSDKBackend(refreshToken, accessToken string, onTokenRefresh func(accessToken, refreshToken string)) *sdkBackend {
 	opts := []sdk.Option{sdk.WithRefreshToken(refreshToken)}
@@ -166,6 +169,30 @@ func (b *sdkBackend) UploadFile(ctx context.Context, parentID, name string, size
 		return err
 	}
 	return ossUpload(ctx, r, name, size, tokenResp, resp, progress)
+}
+
+func (b *sdkBackend) DownloadQuota(ctx context.Context) (DownloadQuota, error) {
+	return DownloadQuota{}, errCookieAuthRequired
+}
+
+func (b *sdkBackend) DownloadList(ctx context.Context, filter TaskFilter, page, pageSize int) ([]CloudTask, int, error) {
+	return nil, 0, errCookieAuthRequired
+}
+
+func (b *sdkBackend) DownloadAdd(ctx context.Context, url, parentID string) (CloudTask, error) {
+	return CloudTask{}, errCookieAuthRequired
+}
+
+func (b *sdkBackend) DownloadDelete(ctx context.Context, hashes []string) error {
+	return errCookieAuthRequired
+}
+
+func (b *sdkBackend) DownloadRetry(ctx context.Context, hash string) error {
+	return errCookieAuthRequired
+}
+
+func (b *sdkBackend) DownloadClear(ctx context.Context, filter TaskFilter) error {
+	return errCookieAuthRequired
 }
 
 func (b *sdkBackend) verifyAndUploadInit(ctx context.Context, parentID, name string, size int64, fullSHA1, preSHA1 string, resp *sdk.UploadInitResp, r io.ReadSeeker) (*sdk.UploadInitResp, error) {

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -14,14 +16,16 @@ import (
 )
 
 const (
-	cookieUA     = "Mozilla/5.0 115Browser/35.0.2.3"
-	apiFileList  = "https://webapi.115.com/files"
-	apiDirInfo   = "https://webapi.115.com/category/get"
-	apiDirAdd    = "https://webapi.115.com/files/add"
-	apiDelete    = "https://webapi.115.com/rb/delete"
-	apiDownload  = "https://proapi.115.com/app/chrome/downurl"
-	defaultLimit = int64(200)
-	maxPageLimit = int64(1150)
+	cookieUA      = "Mozilla/5.0 115Browser/35.0.2.3"
+	apiFileList   = "https://webapi.115.com/files"
+	apiDirInfo    = "https://webapi.115.com/category/get"
+	apiDirAdd     = "https://webapi.115.com/files/add"
+	apiDelete     = "https://webapi.115.com/rb/delete"
+	apiDownload   = "https://proapi.115.com/app/chrome/downurl"
+	apiOffline    = "https://lixian.115.com/lixian/"
+	apiOfflineWeb = "https://lixian.115.com/web/lixian/"
+	defaultLimit  = int64(200)
+	maxPageLimit  = int64(1150)
 )
 
 type cookieBackend struct {
@@ -237,6 +241,152 @@ func (b *cookieBackend) DownloadURL(ctx context.Context, file Entry) (string, ma
 	return "", nil, fmt.Errorf("download url not returned for %s", file.Name)
 }
 
+func (b *cookieBackend) DownloadQuota(ctx context.Context) (DownloadQuota, error) {
+	q := url.Values{}
+	q.Set("ct", "lixian")
+	q.Set("ac", "get_quota_info")
+	var resp cookieOfflineQuotaResp
+	if err := b.getJSON(ctx, apiOffline+"?"+q.Encode(), &resp); err != nil {
+		return DownloadQuota{}, err
+	}
+	if !resp.State.OK() {
+		return DownloadQuota{}, cookieAPIError(resp.basic())
+	}
+	return DownloadQuota{Remaining: int(resp.Quota), Total: int(resp.Total)}, nil
+}
+
+func (b *cookieBackend) DownloadList(ctx context.Context, filter TaskFilter, page, pageSize int) ([]CloudTask, int, error) {
+	q := url.Values{}
+	q.Set("ct", "lixian")
+	q.Set("ac", "task_lists")
+	q.Set("page", strconv.Itoa(page))
+	q.Set("page_size", strconv.Itoa(pageSize))
+	if stat, ok := taskFilterStat(filter); ok {
+		q.Set("stat", strconv.Itoa(stat))
+	}
+	var resp cookieOfflineListResp
+	if err := b.getJSON(ctx, apiOffline+"?"+q.Encode(), &resp); err != nil {
+		return nil, 0, err
+	}
+	if !resp.State.OK() {
+		return nil, 0, cookieAPIError(resp.basic())
+	}
+	tasks := make([]CloudTask, 0, len(resp.Tasks))
+	for _, task := range resp.Tasks {
+		tasks = append(tasks, cloudTaskFromCookie(task))
+	}
+	return tasks, resp.Count, nil
+}
+
+func (b *cookieBackend) DownloadAdd(ctx context.Context, sourceURL, parentID string) (CloudTask, error) {
+	form := url.Values{}
+	form.Set("ct", "lixian")
+	form.Set("ac", "add_task_url")
+	form.Set("url", sourceURL)
+	if parentID != "" {
+		form.Set("wp_path_id", parentID)
+	}
+	var resp cookieOfflineAddResp
+	if err := b.postFormJSON(ctx, apiOfflineWeb, form, &resp); err != nil {
+		return CloudTask{}, err
+	}
+	if !resp.State.OK() {
+		return CloudTask{}, cookieAPIError(resp.basic())
+	}
+	hash := resp.InfoHash
+	if hash == "" {
+		hash = resp.Data.InfoHash
+	}
+	if hash == "" {
+		return CloudTask{}, fmt.Errorf("115 add task response missing info_hash")
+	}
+	return b.findDownloadTask(ctx, hash)
+}
+
+func (b *cookieBackend) DownloadDelete(ctx context.Context, hashes []string) error {
+	form := url.Values{}
+	form.Set("ct", "lixian")
+	form.Set("ac", "task_del")
+	for i, hash := range hashes {
+		form.Set(fmt.Sprintf("hash[%d]", i), hash)
+	}
+	var resp cookieOfflineBasicResp
+	if err := b.postFormJSON(ctx, apiOffline, form, &resp); err != nil {
+		return err
+	}
+	if !resp.State.OK() {
+		return cookieAPIError(resp.basic())
+	}
+	return nil
+}
+
+func (b *cookieBackend) DownloadRetry(ctx context.Context, hash string) error {
+	task, err := b.findDownloadTaskByHash(ctx, hash)
+	if err != nil {
+		return err
+	}
+	if task.URL == "" {
+		return fmt.Errorf("cloud download task %s cannot be retried: source url not returned by 115", hash)
+	}
+	if err := b.DownloadDelete(ctx, []string{hash}); err != nil {
+		return err
+	}
+	_, err = b.DownloadAdd(ctx, task.URL, task.FolderID)
+	return err
+}
+
+func (b *cookieBackend) DownloadClear(ctx context.Context, filter TaskFilter) error {
+	flag := 0
+	if filter != "" {
+		flag = map[TaskFilter]int{
+			TaskFilterCompleted: 0,
+			TaskFilterFailed:    2,
+			TaskFilterRunning:   3,
+		}[filter]
+	}
+	form := url.Values{}
+	form.Set("ct", "lixian")
+	form.Set("ac", "task_clear")
+	form.Set("flag", strconv.Itoa(flag))
+	var resp cookieOfflineBasicResp
+	if err := b.postFormJSON(ctx, apiOffline, form, &resp); err != nil {
+		return err
+	}
+	if !resp.State.OK() {
+		return cookieAPIError(resp.basic())
+	}
+	return nil
+}
+
+func (b *cookieBackend) findDownloadTask(ctx context.Context, hash string) (CloudTask, error) {
+	task, err := b.findDownloadTaskByHash(ctx, hash)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return CloudTask{InfoHash: hash, Status: TaskStatusWaiting}, nil
+		}
+		return CloudTask{}, err
+	}
+	return task, nil
+}
+
+func (b *cookieBackend) findDownloadTaskByHash(ctx context.Context, hash string) (CloudTask, error) {
+	for page := 1; ; page++ {
+		tasks, total, err := b.DownloadList(ctx, "", page, downloadPageSize)
+		if err != nil {
+			return CloudTask{}, err
+		}
+		for _, task := range tasks {
+			if task.InfoHash == hash {
+				return task, nil
+			}
+		}
+		if len(tasks) == 0 || page*downloadPageSize >= total {
+			break
+		}
+	}
+	return CloudTask{}, fmt.Errorf("%w: cloud download task %s", ErrNotFound, hash)
+}
+
 func (b *cookieBackend) getJSON(ctx context.Context, endpoint string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -255,21 +405,44 @@ func (b *cookieBackend) getJSON(ctx context.Context, endpoint string, out any) e
 }
 
 func (b *cookieBackend) postFormJSON(ctx context.Context, endpoint string, form url.Values, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBufferString(form.Encode()))
+	body, err := b.postForm(ctx, endpoint, form)
 	if err != nil {
 		return err
+	}
+	return decodeCookieJSON(endpoint, body, out)
+}
+
+func (b *cookieBackend) postForm(ctx context.Context, endpoint string, form url.Values) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBufferString(form.Encode()))
+	if err != nil {
+		return nil, err
 	}
 	b.setHeaders(req)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("115 request failed: %s", resp.Status)
+		return nil, fmt.Errorf("115 request failed: %s", resp.Status)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return io.ReadAll(resp.Body)
+}
+
+func decodeCookieJSON(endpoint string, body []byte, out any) error {
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("decode 115 response from %s: %w: %q", endpoint, err, responseExcerpt(body))
+	}
+	return nil
+}
+
+func responseExcerpt(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if len(s) > 120 {
+		s = s[:120]
+	}
+	return s
 }
 
 func (b *cookieBackend) setHeaders(req *http.Request) {
@@ -313,6 +486,34 @@ func entryFromCookie(f cookieFileInfo) Entry {
 		PickCode:  f.PickCode,
 		CreatedAt: parseCookieTime(f.CreateTime),
 		UpdatedAt: parseCookieTime(f.UpdateTime),
+	}
+}
+
+func taskFilterStat(filter TaskFilter) (int, bool) {
+	switch filter {
+	case TaskFilterCompleted:
+		return 11, true
+	case TaskFilterFailed:
+		return 9, true
+	case TaskFilterRunning:
+		return 12, true
+	default:
+		return 0, false
+	}
+}
+
+func cloudTaskFromCookie(task cookieOfflineTask) CloudTask {
+	return CloudTask{
+		InfoHash:    task.InfoHash,
+		Name:        task.Name,
+		Size:        int64(task.Size),
+		Status:      TaskStatus(task.Status),
+		PercentDone: float64(task.PercentDone),
+		URL:         task.URL,
+		FileID:      task.FileID,
+		PickCode:    task.PickCode,
+		FolderID:    task.FolderID,
+		AddTime:     parseCookieTime(string(task.AddTime)),
 	}
 }
 
@@ -389,6 +590,37 @@ func (v *cookieStringInt) UnmarshalJSON(b []byte) error {
 	}
 	*v = cookieStringInt(i)
 	return nil
+}
+
+type cookieBool bool
+
+func (v *cookieBool) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*v = cookieBool(s == "1" || strings.EqualFold(s, "true"))
+		return nil
+	}
+	var ok bool
+	if err := json.Unmarshal(b, &ok); err == nil {
+		*v = cookieBool(ok)
+		return nil
+	}
+	var n int
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	*v = cookieBool(n != 0)
+	return nil
+}
+
+func (v cookieBool) OK() bool {
+	return bool(v)
 }
 
 type cookieBasicResp struct {
@@ -494,6 +726,100 @@ type cookieDownloadInfo struct {
 		URL        string               `json:"url"`
 		AuthCookie cookieDownloadCookie `json:"auth_cookie"`
 	} `json:"url"`
+}
+
+type cookieOfflineBasicResp struct {
+	Errno cookieStringInt `json:"errno,omitempty"`
+	ErrNo int             `json:"errNo,omitempty"`
+	Error string          `json:"error,omitempty"`
+	State cookieBool      `json:"state,omitempty"`
+	Msg   string          `json:"msg,omitempty"`
+}
+
+func (r cookieOfflineBasicResp) basic() cookieBasicResp {
+	return cookieBasicResp{Errno: r.Errno, ErrNo: r.ErrNo, Error: r.Error, State: r.State.OK(), Msg: r.Msg}
+}
+
+type cookieOfflineQuotaResp struct {
+	Errno cookieStringInt `json:"errno,omitempty"`
+	ErrNo int             `json:"errNo,omitempty"`
+	Error string          `json:"error,omitempty"`
+	State cookieBool      `json:"state,omitempty"`
+	Msg   string          `json:"msg,omitempty"`
+	Quota cookieStringInt `json:"quota"`
+	Total cookieStringInt `json:"total"`
+}
+
+func (r cookieOfflineQuotaResp) basic() cookieBasicResp {
+	return cookieBasicResp{Errno: r.Errno, ErrNo: r.ErrNo, Error: r.Error, State: r.State.OK(), Msg: r.Msg}
+}
+
+type cookieOfflineListResp struct {
+	Errno   cookieStringInt     `json:"errno,omitempty"`
+	ErrNo   int                 `json:"errNo,omitempty"`
+	Error   string              `json:"error,omitempty"`
+	State   cookieBool          `json:"state,omitempty"`
+	Msg     string              `json:"msg,omitempty"`
+	Count   int                 `json:"count"`
+	Page    int                 `json:"page"`
+	PageRow int                 `json:"page_row"`
+	Tasks   []cookieOfflineTask `json:"tasks"`
+}
+
+func (r cookieOfflineListResp) basic() cookieBasicResp {
+	return cookieBasicResp{Errno: r.Errno, ErrNo: r.ErrNo, Error: r.Error, State: r.State.OK(), Msg: r.Msg}
+}
+
+type cookieOfflineTask struct {
+	InfoHash    string          `json:"info_hash"`
+	Name        string          `json:"name"`
+	Size        cookieStringInt `json:"size"`
+	Status      cookieStringInt `json:"status"`
+	PercentDone cookieFloat     `json:"percentDone"`
+	URL         string          `json:"url"`
+	FileID      string          `json:"file_id"`
+	PickCode    string          `json:"pick_code"`
+	FolderID    string          `json:"wp_path_id"`
+	AddTime     cookieIntString `json:"add_time"`
+}
+
+type cookieOfflineAddResp struct {
+	Errno    cookieStringInt `json:"errno,omitempty"`
+	ErrNo    int             `json:"errNo,omitempty"`
+	Error    string          `json:"error,omitempty"`
+	State    cookieBool      `json:"state,omitempty"`
+	Msg      string          `json:"msg,omitempty"`
+	InfoHash string          `json:"info_hash,omitempty"`
+	Data     struct {
+		InfoHash string `json:"info_hash"`
+	} `json:"data"`
+}
+
+func (r cookieOfflineAddResp) basic() cookieBasicResp {
+	return cookieBasicResp{Errno: r.Errno, ErrNo: r.ErrNo, Error: r.Error, State: r.State.OK(), Msg: r.Msg}
+}
+
+type cookieFloat float64
+
+func (v *cookieFloat) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		f, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		*v = cookieFloat(f)
+		return nil
+	}
+	var f float64
+	if err := json.Unmarshal(b, &f); err != nil {
+		return err
+	}
+	*v = cookieFloat(f)
+	return nil
 }
 
 type cookieDownloadCookie string

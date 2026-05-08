@@ -26,6 +26,7 @@ type fakeBackend struct {
 	download   string
 	headers    map[string]string
 	lastHeader http.Header
+	tasks      []CloudTask
 }
 
 func (f *fakeBackend) ListByID(ctx context.Context, id string) ([]Entry, error) {
@@ -69,6 +70,51 @@ func (f *fakeBackend) DownloadURL(ctx context.Context, file Entry) (string, map[
 func (f *fakeBackend) UploadFile(ctx context.Context, parentID, name string, size int64, r io.ReadSeeker, progress ProgressFunc) error {
 	f.uploads = append(f.uploads, parentID+":"+name)
 	return nil
+}
+
+func (f *fakeBackend) DownloadQuota(ctx context.Context) (DownloadQuota, error) {
+	return DownloadQuota{Remaining: 1, Total: 2}, nil
+}
+
+func (f *fakeBackend) DownloadList(ctx context.Context, filter TaskFilter, page, pageSize int) ([]CloudTask, int, error) {
+	var out []CloudTask
+	for _, task := range f.tasks {
+		if filter == "" || taskMatchesFilter(task, filter) {
+			out = append(out, task)
+		}
+	}
+	return out, len(out), nil
+}
+
+func (f *fakeBackend) DownloadAdd(ctx context.Context, url, parentID string) (CloudTask, error) {
+	task := CloudTask{InfoHash: "hash", URL: url, FolderID: parentID, Status: TaskStatusWaiting}
+	f.tasks = append(f.tasks, task)
+	return task, nil
+}
+
+func (f *fakeBackend) DownloadDelete(ctx context.Context, hashes []string) error {
+	return nil
+}
+
+func (f *fakeBackend) DownloadRetry(ctx context.Context, hash string) error {
+	return nil
+}
+
+func (f *fakeBackend) DownloadClear(ctx context.Context, filter TaskFilter) error {
+	return nil
+}
+
+func taskMatchesFilter(task CloudTask, filter TaskFilter) bool {
+	switch filter {
+	case TaskFilterCompleted:
+		return task.Status == TaskStatusCompleted
+	case TaskFilterFailed:
+		return task.Status == TaskStatusFailed
+	case TaskFilterRunning:
+		return task.Status == TaskStatusDownloading || task.Status == TaskStatusWaiting
+	default:
+		return true
+	}
 }
 
 func TestResolveNestedRemotePath(t *testing.T) {
