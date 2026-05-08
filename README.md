@@ -2,6 +2,10 @@
 
 `115cli` is a Go CLI for 115.com cloud drive using the official 115 Open API.
 
+## Disclaimer
+
+`115cli` is not an official 115 product and is provided only for personal learning purposes. Use it at your own risk; you are solely responsible for any issues, losses, account problems, or other consequences arising from its use.
+
 ## Build
 
 ```sh
