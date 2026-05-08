@@ -15,7 +15,7 @@
 ## Auth
 
 - Cookie auth is the recommended path when the user cannot get a 115 Open Platform App ID:
-  `./115cli auth cookie --cookie 'UID=...; CID=...; SEID=...; KID=...'`
+  `./115cli auth cookie 'UID=...; CID=...; SEID=...; KID=...'`
 - Treat cookies, refresh tokens, access tokens, and config files as sensitive secrets. Do not print real values, commit them, or include them in logs or examples.
 - Open API login is available for users with a 115 Open Platform App ID:
   `./115cli auth login --client-id '<your-115-open-platform-app-id>'`

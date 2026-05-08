@@ -18,7 +18,6 @@ import (
 var (
 	authRefreshToken string
 	authRootID       string
-	authCookie       string
 	loginClientID    string
 	loginTimeout     time.Duration
 	loginPoll        time.Duration
@@ -52,14 +51,12 @@ var authCmd = &cobra.Command{
 }
 
 var authCookieCmd = &cobra.Command{
-	Use:   "cookie --cookie <browser-cookie>",
+	Use:   "cookie <browser-cookie>",
 	Short: "Save 115 browser cookies",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if authCookie == "" {
-			return fmt.Errorf("--cookie is required; copy UID/CID/SEID/KID from your logged-in browser session")
-		}
 		cfg := &config.Config{
-			Cookie: authCookie,
+			Cookie: args[0],
 			RootID: authRootID,
 		}
 		if err := config.Save(configPath, cfg); err != nil {
@@ -176,7 +173,6 @@ var authLoginCmd = &cobra.Command{
 func init() {
 	authCmd.Flags().StringVar(&authRefreshToken, "refresh-token", "", "115 Open API refresh token")
 	authCmd.Flags().StringVar(&authRootID, "root-id", "0", "115 root folder id")
-	authCookieCmd.Flags().StringVar(&authCookie, "cookie", "", "115 browser cookie, e.g. UID=...; CID=...; SEID=...; KID=...")
 	authCookieCmd.Flags().StringVar(&authRootID, "root-id", "0", "115 root folder id")
 	authLoginCmd.Flags().StringVar(&loginClientID, "client-id", "", "115 Open Platform App ID")
 	authLoginCmd.Flags().StringVar(&authRootID, "root-id", "0", "115 root folder id")

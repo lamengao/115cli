@@ -19,7 +19,7 @@ Project convention: build the global `115cli` executable into `~/bin/115cli`.
 Cookie auth is the recommended path when you cannot get a 115 Open Platform App ID.
 
 ```sh
-./115cli auth cookie --cookie 'UID=...; CID=...; SEID=...; KID=...'
+./115cli auth cookie 'UID=...; CID=...; SEID=...; KID=...'
 ```
 
 You can copy the cookie from a browser session that is already logged in to `115.com`.

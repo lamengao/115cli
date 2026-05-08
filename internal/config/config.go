@@ -42,7 +42,7 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("config not found; run `115cli auth cookie --cookie '<cookie>'` first")
+			return nil, fmt.Errorf("config not found; run `115cli auth cookie '<cookie>'` first")
 		}
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func Load(path string) (*Config, error) {
 		cfg.RootID = "0"
 	}
 	if cfg.Cookie == "" && cfg.RefreshToken == "" {
-		return nil, fmt.Errorf("missing credentials; run `115cli auth cookie --cookie '<cookie>'`")
+		return nil, fmt.Errorf("missing credentials; run `115cli auth cookie '<cookie>'`")
 	}
 	return &cfg, nil
 }
