@@ -146,6 +146,54 @@ func TestCookieDownloadClearDefaultsToCompletedTasks(t *testing.T) {
 	}
 }
 
+func TestCookieSpaceUsesIndexInfo(t *testing.T) {
+	b := &cookieBackend{
+		cookie: "UID=test; CID=test",
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/files/index_info" {
+				t.Fatalf("path = %q", req.URL.Path)
+			}
+			if got := req.URL.Query().Get("count_space_nums"); got != "0" {
+				t.Fatalf("count_space_nums = %q", got)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"state":true,"data":{"space_info":{"all_total":{"size":10485760},"all_remain":{"size":"5242880"}}}}`)),
+			}, nil
+		})},
+	}
+	got, err := b.Space(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Remaining != 5*1024*1024 || got.Total != 10*1024*1024 {
+		t.Fatalf("space = %#v", got)
+	}
+}
+
+func TestCookieSpaceSupportsLegacyTopLevelSpaceInfo(t *testing.T) {
+	b := &cookieBackend{
+		cookie: "UID=test; CID=test",
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"state":true,"space_info":{"all_total":{"size":10485760},"all_remain":{"size":5242880}}}`)),
+			}, nil
+		})},
+	}
+	got, err := b.Space(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Remaining != 5*1024*1024 || got.Total != 10*1024*1024 {
+		t.Fatalf("space = %#v", got)
+	}
+}
+
 func TestParseInfoSize(t *testing.T) {
 	tests := map[string]int64{
 		"":       0,

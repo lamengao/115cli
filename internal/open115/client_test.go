@@ -72,6 +72,10 @@ func (f *fakeBackend) UploadFile(ctx context.Context, parentID, name string, siz
 	return nil
 }
 
+func (f *fakeBackend) Space(ctx context.Context) (Space, error) {
+	return Space{Remaining: 3, Total: 5}, nil
+}
+
 func (f *fakeBackend) DownloadQuota(ctx context.Context) (DownloadQuota, error) {
 	return DownloadQuota{Remaining: 1, Total: 2}, nil
 }

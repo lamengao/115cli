@@ -27,6 +27,11 @@ type DownloadQuota struct {
 	Total     int
 }
 
+type Space struct {
+	Remaining int64
+	Total     int64
+}
+
 type TaskStatus int
 
 const (

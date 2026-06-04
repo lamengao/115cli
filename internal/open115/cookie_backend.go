@@ -22,6 +22,7 @@ const (
 	apiDirAdd     = "https://webapi.115.com/files/add"
 	apiDelete     = "https://webapi.115.com/rb/delete"
 	apiDownload   = "https://proapi.115.com/app/chrome/downurl"
+	apiIndexInfo  = "https://webapi.115.com/files/index_info"
 	apiOffline    = "https://lixian.115.com/lixian/"
 	apiOfflineWeb = "https://lixian.115.com/web/lixian/"
 	defaultLimit  = int64(200)
@@ -126,7 +127,7 @@ func (b *cookieBackend) InfoByID(ctx context.Context, id string) (Info, error) {
 	if err := b.getJSON(ctx, apiDirInfo+"?"+q.Encode(), &resp); err != nil {
 		return Info{}, err
 	}
-	if !resp.State {
+	if !resp.State.OK() {
 		return Info{}, cookieAPIError(resp.basic())
 	}
 	size, err := parseInfoSize(string(resp.Size))
@@ -239,6 +240,29 @@ func (b *cookieBackend) DownloadURL(ctx context.Context, file Entry) (string, ma
 		}, nil
 	}
 	return "", nil, fmt.Errorf("download url not returned for %s", file.Name)
+}
+
+func (b *cookieBackend) Space(ctx context.Context) (Space, error) {
+	q := url.Values{}
+	q.Set("count_space_nums", "0")
+	var resp cookieIndexInfoResp
+	if err := b.getJSON(ctx, apiIndexInfo+"?"+q.Encode(), &resp); err != nil {
+		return Space{}, err
+	}
+	if !resp.State.OK() {
+		return Space{}, cookieAPIError(resp.basic())
+	}
+	info := resp.Data.SpaceInfo
+	if info.AllTotal.Size == 0 && info.AllRemain.Size == 0 {
+		info = resp.SpaceInfo
+	}
+	if info.AllTotal.Size == 0 && info.AllRemain.Size == 0 {
+		info = resp.RtSpaceInfo
+	}
+	return Space{
+		Remaining: int64(info.AllRemain.Size),
+		Total:     int64(info.AllTotal.Size),
+	}, nil
 }
 
 func (b *cookieBackend) DownloadQuota(ctx context.Context) (DownloadQuota, error) {
@@ -663,7 +687,7 @@ type cookieDirInfoResp struct {
 	Errno       cookieStringInt `json:"errno,omitempty"`
 	ErrNo       int             `json:"errNo,omitempty"`
 	Error       string          `json:"error,omitempty"`
-	State       bool            `json:"state,omitempty"`
+	State       cookieBool      `json:"state,omitempty"`
 	Msg         string          `json:"msg,omitempty"`
 	Count       cookieIntString `json:"count"`
 	Size        cookieIntString `json:"size"`
@@ -676,7 +700,7 @@ type cookieDirInfoResp struct {
 }
 
 func (r cookieDirInfoResp) basic() cookieBasicResp {
-	return cookieBasicResp{Errno: r.Errno, ErrNo: r.ErrNo, Error: r.Error, State: r.State, Msg: r.Msg}
+	return cookieBasicResp{Errno: r.Errno, ErrNo: r.ErrNo, Error: r.Error, State: r.State.OK(), Msg: r.Msg}
 }
 
 type cookieMkdirResp struct {
@@ -726,6 +750,35 @@ type cookieDownloadInfo struct {
 		URL        string               `json:"url"`
 		AuthCookie cookieDownloadCookie `json:"auth_cookie"`
 	} `json:"url"`
+}
+
+type cookieIndexInfoResp struct {
+	Errno       cookieStringInt `json:"errno,omitempty"`
+	ErrNo       int             `json:"errNo,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	State       cookieBool      `json:"state,omitempty"`
+	Msg         string          `json:"msg,omitempty"`
+	Data        cookieInfoData  `json:"data"`
+	SpaceInfo   cookieSpaceInfo `json:"space_info"`
+	RtSpaceInfo cookieSpaceInfo `json:"rt_space_info"`
+}
+
+func (r cookieIndexInfoResp) basic() cookieBasicResp {
+	return cookieBasicResp{Errno: r.Errno, ErrNo: r.ErrNo, Error: r.Error, State: r.State.OK(), Msg: r.Msg}
+}
+
+type cookieInfoData struct {
+	SpaceInfo   cookieSpaceInfo `json:"space_info"`
+	RtSpaceInfo cookieSpaceInfo `json:"rt_space_info"`
+}
+
+type cookieSpaceInfo struct {
+	AllTotal  cookieSpaceSize `json:"all_total"`
+	AllRemain cookieSpaceSize `json:"all_remain"`
+}
+
+type cookieSpaceSize struct {
+	Size cookieStringInt `json:"size"`
 }
 
 type cookieOfflineBasicResp struct {

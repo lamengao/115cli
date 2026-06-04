@@ -14,6 +14,7 @@ import (
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	sdk "github.com/xhofe/115-sdk-go"
+	"github.com/xhofe/115-sdk-go/json_types"
 )
 
 const userAgent = "115cli/0.1"
@@ -23,6 +24,13 @@ type sdkBackend struct {
 }
 
 var errCookieAuthRequired = errors.New("cloud download commands require cookie authentication")
+
+func int64OrFloat(value json_types.Int64OrFloat) int64 {
+	if value.Int64 != 0 || value.Float == 0 {
+		return value.Int64
+	}
+	return int64(value.Float)
+}
 
 func newSDKBackend(refreshToken, accessToken string, onTokenRefresh func(accessToken, refreshToken string)) *sdkBackend {
 	opts := []sdk.Option{sdk.WithRefreshToken(refreshToken)}
@@ -169,6 +177,17 @@ func (b *sdkBackend) UploadFile(ctx context.Context, parentID, name string, size
 		return err
 	}
 	return ossUpload(ctx, r, name, size, tokenResp, resp, progress)
+}
+
+func (b *sdkBackend) Space(ctx context.Context) (Space, error) {
+	resp, err := b.client.UserInfo(ctx)
+	if err != nil {
+		return Space{}, err
+	}
+	return Space{
+		Remaining: int64OrFloat(resp.RtSpaceInfo.AllRemain.Size),
+		Total:     int64OrFloat(resp.RtSpaceInfo.AllTotal.Size),
+	}, nil
 }
 
 func (b *sdkBackend) DownloadQuota(ctx context.Context) (DownloadQuota, error) {

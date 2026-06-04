@@ -29,5 +29,5 @@ var rootCmd = &cobra.Command{
 func init() {
 	rootCmd.PersistentFlags().StringVar(&configPath, "config", "", "config file path")
 	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "enable verbose output")
-	rootCmd.AddCommand(authCmd, lsCmd, infoCmd, downCmd, upCmd, syncCmd, delCmd, downloadCmd)
+	rootCmd.AddCommand(authCmd, lsCmd, infoCmd, spaceCmd, downCmd, upCmd, syncCmd, delCmd, downloadCmd)
 }

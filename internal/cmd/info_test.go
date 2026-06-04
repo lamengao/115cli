@@ -54,3 +54,17 @@ func TestFormatBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintSpace(t *testing.T) {
+	var out bytes.Buffer
+	printSpace(&out, open115.Space{Remaining: 5 * 1024 * 1024, Total: 10 * 1024 * 1024})
+	got := out.String()
+	for _, want := range []string{
+		"Remaining: 5.0MB (5242880 bytes)",
+		"Total: 10.0MB (10485760 bytes)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+}
