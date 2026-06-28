@@ -108,6 +108,20 @@ func (c *Client) Info(ctx context.Context, remotePath string) (Info, error) {
 	return info, nil
 }
 
+func (c *Client) SHA1(ctx context.Context, remotePath string) (string, error) {
+	entry, err := c.Resolve(ctx, remotePath)
+	if err != nil {
+		return "", err
+	}
+	if entry.IsDir {
+		return "", fmt.Errorf("%s is not a file", cleanRemote(remotePath))
+	}
+	if entry.Sha1 == "" {
+		return "", fmt.Errorf("sha1 not returned for %s", cleanRemote(remotePath))
+	}
+	return entry.Sha1, nil
+}
+
 func mergeInfoEntry(info, resolved Entry) Entry {
 	if info.ID == "" {
 		info.ID = resolved.ID

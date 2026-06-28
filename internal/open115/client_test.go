@@ -256,6 +256,40 @@ func TestInfoRejectsFiles(t *testing.T) {
 	}
 }
 
+func TestSHA1ReturnsRemoteFileSHA1(t *testing.T) {
+	fb := &fakeBackend{entries: map[string][]Entry{
+		"0": {{ID: "f", Name: "a.txt", IsDir: false, Sha1: "0123456789ABCDEF0123456789ABCDEF01234567"}},
+	}}
+	client := newWithBackend("0", fb, nil)
+	got, err := client.SHA1(context.Background(), "/a.txt")
+	if err != nil {
+		t.Fatalf("SHA1 failed: %v", err)
+	}
+	if got != "0123456789ABCDEF0123456789ABCDEF01234567" {
+		t.Fatalf("sha1 = %q", got)
+	}
+}
+
+func TestSHA1RejectsDirectories(t *testing.T) {
+	fb := &fakeBackend{entries: map[string][]Entry{
+		"0": {{ID: "d", Name: "dir", IsDir: true}},
+	}}
+	client := newWithBackend("0", fb, nil)
+	if _, err := client.SHA1(context.Background(), "/dir"); err == nil {
+		t.Fatal("expected directory sha1 to fail")
+	}
+}
+
+func TestSHA1RejectsMissingHash(t *testing.T) {
+	fb := &fakeBackend{entries: map[string][]Entry{
+		"0": {{ID: "f", Name: "a.txt", IsDir: false}},
+	}}
+	client := newWithBackend("0", fb, nil)
+	if _, err := client.SHA1(context.Background(), "/a.txt"); err == nil {
+		t.Fatal("expected missing sha1 to fail")
+	}
+}
+
 func TestDeleteRemotePath(t *testing.T) {
 	fb := &fakeBackend{entries: map[string][]Entry{
 		"0": {{ID: "d", ParentID: "0", Name: "dst", IsDir: true}},
