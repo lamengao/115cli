@@ -239,6 +239,11 @@ func (c *Client) Delete(ctx context.Context, remotePath string) error {
 	return c.api.Delete(ctx, entry)
 }
 
+func (c *Client) Mkdir(ctx context.Context, remotePath string) error {
+	_, err := c.ensureRemoteDir(ctx, remotePath)
+	return err
+}
+
 func (c *Client) downloadDir(ctx context.Context, dir Entry, localDir string) error {
 	if err := os.MkdirAll(localDir, 0o755); err != nil {
 		return err

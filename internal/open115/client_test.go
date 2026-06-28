@@ -281,6 +281,31 @@ func TestDeleteRefusesRoot(t *testing.T) {
 	}
 }
 
+func TestMkdirCreatesNestedRemoteDirectory(t *testing.T) {
+	fb := &fakeBackend{entries: map[string][]Entry{"0": nil}}
+	client := newWithBackend("0", fb, nil)
+	if err := client.Mkdir(context.Background(), "/backup/newdir"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(fb.mkdirs, ",") != "0:backup,0/backup:newdir" {
+		t.Fatalf("mkdirs = %#v", fb.mkdirs)
+	}
+}
+
+func TestMkdirAcceptsExistingRemoteDirectory(t *testing.T) {
+	fb := &fakeBackend{entries: map[string][]Entry{
+		"0": {{ID: "r", Name: "backup", IsDir: true}},
+		"r": nil,
+	}}
+	client := newWithBackend("0", fb, nil)
+	if err := client.Mkdir(context.Background(), "/backup"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fb.mkdirs) != 0 {
+		t.Fatalf("mkdirs = %#v", fb.mkdirs)
+	}
+}
+
 func TestDownloadResumesPartFile(t *testing.T) {
 	var rangeHeader string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

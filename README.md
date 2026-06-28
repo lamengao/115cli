@@ -47,6 +47,7 @@ The default config path is `~/.config/115cli/config.json`. You can override it w
 ./115cli space
 ./115cli down /remote/file.txt ./file.txt
 ./115cli down /remote/folder ./downloads
+./115cli mkdir /remote/folder
 ./115cli up ./local-file.txt /remote/folder
 ./115cli up ./local-folder /remote/backup
 ./115cli sync ./local-folder /remote/backup
